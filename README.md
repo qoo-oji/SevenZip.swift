@@ -6,6 +6,7 @@ A tiny Swift library to extract 7zip archive using [LZMA SDK v26.02](https://www
 
 - [x] Extract a file from 7z archive file to memory
 - [x] Read entries of a solid archive one after another with bounded memory (streaming)
+- [x] Open an archive held in memory (`Archive(data:)`), e.g. a nested archive, without writing it to disk
 
 ## Requirements
 
@@ -60,6 +61,16 @@ Memory stays at the LZMA dictionary size plus a few hundred KB. Jumping backward
 inside a solid block restarts that block's decoder (solid blocks are one stream).
 Blocks using BCJ2 fall back to `extract(entry:)`; BZip2/Deflate/AES blocks are not
 supported by either path. PPMd is supported by both.
+
+#### Archives held in memory
+
+```swift
+// e.g. a .7z stored inside another archive: no temporary file needed
+let inner = try Archive(data: bytes)
+```
+
+The bytes are copied once into a buffer owned by the `Archive`; the caller may drop
+its `Data` afterwards.
 
 Details of this fork's changes: [docs/StreamingExtraction.md](docs/StreamingExtraction.md) (Japanese).
 

@@ -4,6 +4,7 @@
 #include "../7zTypes.h"
 #include "../7zCrc.h"
 #include "../7zFolderStream.h"
+#include "../7zMemInStream.h"
 
 // #define SzArEx_IsDir(p, i) (SzBitArray_Check((p)->IsDirs, i))
 int SevenZip_SzArEx_IsDir(const CSzArEx *p, UInt32 fileIndex) {

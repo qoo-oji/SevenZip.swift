@@ -21,7 +21,8 @@ GB 単位のメモリが常駐します。
 | `Sources/CsevenZip/7zFolderStream.h` / `.c`(新規) | 1 ブロックぶんのストリーミングデコーダ(C)。7zDec.c の `SzFolder_Decode2` のコーダ連鎖の扱いを、逐次 API(`LzmaDec_DecodeToBuf` / `Lzma2Dec_DecodeToBuf` / `Ppmd7z_DecodeSymbol`)で駆動する形に書き直したもの |
 | `Sources/CsevenZip/include/sevenzip.h` | 上記ヘッダを Swift へ公開 |
 | `Sources/SevenZip/ArchiveStreaming.swift`(新規) | Swift 側 API(`read` / `readData` / `discardFolderStream`) |
-| `Sources/SevenZip/Archive.swift` | ブロックデコーダを保持するプロパティと deinit での解放。`db` / `archiveStream` / `allocImp` を internal に。`LZMAError` を public にし `.unsupported` / `.decodeFailed(code:)` を追加。`extract(entry:)` は非対応構成で `.unsupported` を投げる(従来は `.badFile`) |
+| `Sources/CsevenZip/7zMemInStream.h` / `.c`(新規) | メモリ上のバッファを読む `ISeekInStream`。`Archive(data:)` の土台 |
+| `Sources/SevenZip/Archive.swift` | `init(data:)`(メモリから開く)を追加し、ファイル/メモリどちらの入力も `seekStream` 経由で読むように整理。deinit でファイルを閉じる(upstream は閉じていなかった)。ブロックデコーダを保持するプロパティと deinit での解放。`db` / `archiveStream` / `allocImp` を internal に。`LZMAError` を public にし `.unsupported` / `.decodeFailed(code:)` を追加。`extract(entry:)` は非対応構成で `.unsupported` を投げる(従来は `.badFile`) |
 | `Package.swift` | `7zFolderStream.c` をソースに追加。`Z7_PPMD_SUPPORT` を定義(下記)。`sevenzip-bench` 実行ターゲットと `streaming-fixture` リソースを追加 |
 | `Sources/sevenzip-bench/main.swift`(新規) | 旧経路と新経路の時間・メモリ比較ツール |
 | `Tests/SevenZipTests/StreamingTests.swift`(新規) | ストリーミング経路のテスト |
@@ -49,6 +50,18 @@ archive.discardFolderStream()
 
 - 空ファイルとディレクトリは `body` を呼ばずに終了し、`readData` は空の `Data` を返します。
 - 同じ `Archive` を複数スレッドから同時に使うことはできません(upstream と同じ)。デコーダの状態は `Archive` が 1 つだけ保持します。
+
+## メモリ上の書庫を開く(`Archive(data:)`)
+
+入れ子の書庫を一時ファイルに書き出さずに読むための入口です。LZMA SDK の入力は `ISeekInStream` という
+仮想テーブルなので、`7zMemInStream.c` にメモリ上のバッファを読む実装(Read と Seek だけ)を足し、
+`Archive` はファイル(`CFileInStream`)とメモリ(`CMemInStream`)のどちらかを `seekStream` として
+持つようにしました。ヘッダの読み込み(`SzArEx_Open`)、旧経路(`SzArEx_Extract`)、ストリーミング経路
+(`SzFolderStream`)はいずれもこの `seekStream` から読むので、以後の処理はファイルの場合と同じです。
+
+渡された `Data` は `Archive` が持つバッファへ **1 回コピー**します。`Archive` は開いたまま長く生きる
+オブジェクトで、`Data` のポインタは `withUnsafeBytes` の外では安定が保証されないためです。呼び出し側は
+開いたあと自分の `Data` を手放して構いません(その時点で書庫 1 つぶんのメモリになります)。
 
 ## 動作
 

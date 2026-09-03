@@ -23,11 +23,23 @@ public class Archive {
     var allocImp = ISzAlloc(Alloc: SzAlloc, Free: SzFree)
     private var allocTempImp = ISzAlloc(Alloc: SzAlloc, Free: SzFree)
     var db = CSzArEx()
-    let archiveStream: UnsafeMutablePointer<CFileInStream> = {
+    /// File-backed source (`init(fileURL:)`).
+    private let archiveStream: UnsafeMutablePointer<CFileInStream> = {
         let ptr = UnsafeMutablePointer<CFileInStream>.allocate(capacity: 1)
         ptr.initialize(to: CFileInStream())
         return ptr
     }()
+    private var isFileOpen = false
+    /// Memory-backed source (`init(data:)`): the archive bytes and the LZMA SDK stream over them.
+    private var memoryBuffer: UnsafeMutableRawBufferPointer?
+    private var memoryStream: UnsafeMutablePointer<CMemInStream>?
+    /// The seekable stream every reader (block cache and streaming decoder) pulls the archive from.
+    var seekStream: ISeekInStreamPtr {
+        if let memoryStream = self.memoryStream {
+            return UnsafePointer(memoryStream.pointer(to: \.vt)!)
+        }
+        return UnsafePointer(self.archiveStream.pointer(to: \.vt)!)
+    }
     private var lookStream = CLookToRead2()
     private var blockIndex: UInt32 = 0xFFFF_FFFF  // it can have any value before first call (if outBuffer = 0)
     private var outBuffer = UnsafeMutablePointer<UInt8>(bitPattern: 0)
@@ -45,7 +57,30 @@ public class Archive {
         if result != 0 {
             throw LZMAError.badFile
         }
+        self.isFileOpen = true
         FileInStream_CreateVTable(self.archiveStream)
+        try self.openDatabase()
+    }
+
+    /// Opens an archive held in memory, so that nothing has to be written to disk.
+    ///
+    /// The bytes are copied once into a buffer owned by the archive (`Data` does not
+    /// guarantee a stable pointer for the archive's lifetime); the caller may drop its
+    /// copy afterwards.
+    public init(data: Data) throws {
+        _ = moduleInit
+        let buffer = UnsafeMutableRawBufferPointer.allocate(byteCount: max(data.count, 1), alignment: 16)
+        data.copyBytes(to: buffer)
+        self.memoryBuffer = buffer
+        let stream = UnsafeMutablePointer<CMemInStream>.allocate(capacity: 1)
+        stream.initialize(to: CMemInStream())
+        MemInStream_Init(stream, buffer.baseAddress, data.count)
+        self.memoryStream = stream
+        try self.openDatabase()
+    }
+
+    /// Reads the archive database (headers) through `seekStream` and builds `entries`.
+    private func openDatabase() throws {
         LookToRead2_CreateVTable(&self.lookStream, 0)
         let bufSize = 1 << 18
         guard let buf = self.allocImp.Alloc(nil, bufSize)?.assumingMemoryBound(to: UInt8.self) else {
@@ -56,7 +91,7 @@ public class Archive {
         defer {
             self.allocImp.Free(nil, buf)
         }
-        self.lookStream.realStream = self.archiveStream.pointer(to: \.vt)
+        self.lookStream.realStream = self.seekStream
         SevenZip_LookToRead2_Init(&self.lookStream)
 
         SzArEx_Init(&self.db)
@@ -96,8 +131,16 @@ public class Archive {
             self.allocImp.Free(nil, pointee)
         }
         SzArEx_Free(&self.db, &self.allocImp)
+        if self.isFileOpen {
+            File_Close(&self.archiveStream.pointee.file)
+        }
         self.archiveStream.deinitialize(count: 1)
         self.archiveStream.deallocate()
+        if let memoryStream = self.memoryStream {
+            memoryStream.deinitialize(count: 1)
+            memoryStream.deallocate()
+        }
+        self.memoryBuffer?.deallocate()
     }
 
     // TODO: super large file

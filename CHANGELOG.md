@@ -4,6 +4,8 @@
 
 - Add streaming extraction with bounded memory: `Archive.read(entry:chunkSize:_:)`, `Archive.readData(entry:maxByteCount:)`, `Archive.discardFolderStream()`
 - Decode PPMd-compressed blocks (`Z7_PPMD_SUPPORT`)
+- Add `Archive(data:)` to open an archive held in memory without a temporary file
+- Close the archive file when the `Archive` is deallocated
 
 ## v0.2.7 (2026-06-27)
 

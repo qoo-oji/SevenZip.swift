@@ -109,7 +109,7 @@ extension Archive {
 
         var created: OpaquePointer?
         let result = SzFolderStream_Create(
-            &created, &self.db, self.archiveStream.pointer(to: \.vt), folderIndex, &self.allocImp)
+            &created, &self.db, self.seekStream, folderIndex, &self.allocImp)
         switch result {
         case SZ_OK:
             break

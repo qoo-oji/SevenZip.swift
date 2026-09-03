@@ -86,6 +86,7 @@ let package = Package(
                 "7zCrcOpt.c",
                 "7zDec.c",
                 "7zFolderStream.c",
+                "7zMemInStream.c",
                 "CpuArch.c",
                 "Delta.c",
                 "LzmaDec.c",
