@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## Unreleased
+
+- Add streaming extraction with bounded memory: `Archive.read(entry:chunkSize:_:)`, `Archive.readData(entry:maxByteCount:)`, `Archive.discardFolderStream()`
+- Decode PPMd-compressed blocks (`Z7_PPMD_SUPPORT`)
+
 ## v0.2.7 (2026-06-27)
 
 - Bump up LZMA SDK to v26.02

@@ -4,9 +4,13 @@
 import CsevenZip
 import Foundation
 
-enum LZMAError: Error {
+public enum LZMAError: Error, Equatable {
     case badFile
     case noMemory
+    /// The coder chain of the entry's block is not supported by this library.
+    case unsupported
+    /// The LZMA SDK reported an error (`SZ_ERROR_*` code) while decoding.
+    case decodeFailed(code: Int32)
 }
 
 private var moduleInit: Void = {
@@ -16,10 +20,10 @@ private var moduleInit: Void = {
 
 public class Archive {
     private(set) public var entries: [Entry] = []
-    private var allocImp = ISzAlloc(Alloc: SzAlloc, Free: SzFree)
+    var allocImp = ISzAlloc(Alloc: SzAlloc, Free: SzFree)
     private var allocTempImp = ISzAlloc(Alloc: SzAlloc, Free: SzFree)
-    private var db = CSzArEx()
-    private let archiveStream: UnsafeMutablePointer<CFileInStream> = {
+    var db = CSzArEx()
+    let archiveStream: UnsafeMutablePointer<CFileInStream> = {
         let ptr = UnsafeMutablePointer<CFileInStream>.allocate(capacity: 1)
         ptr.initialize(to: CFileInStream())
         return ptr
@@ -28,6 +32,10 @@ public class Archive {
     private var blockIndex: UInt32 = 0xFFFF_FFFF  // it can have any value before first call (if outBuffer = 0)
     private var outBuffer = UnsafeMutablePointer<UInt8>(bitPattern: 0)
     private var outBufferSize: Int = 0  // it can have any value before first call (if outBuffer = 0)
+    /// Streaming decoder of the block that was read from most recently (see ArchiveStreaming.swift).
+    /// Kept between calls so that reading the files of a solid block in order decodes the block once.
+    var folderStream: OpaquePointer?
+    var folderStreamIndex: UInt32 = 0
 
     public init(fileURL: URL) throws {
         _ = moduleInit
@@ -83,6 +91,7 @@ public class Archive {
     }
 
     deinit {
+        SzFolderStream_Free(self.folderStream)
         if let pointee = self.outBuffer {
             self.allocImp.Free(nil, pointee)
         }
@@ -110,6 +119,9 @@ public class Archive {
         let result = SzArEx_Extract(
             &self.db, &self.lookStream.vt, entry.index, &self.blockIndex, &self.outBuffer, &self.outBufferSize, &offset, &outSizeProcessed,
             &self.allocImp, &self.allocTempImp)
+        if result == SZ_ERROR_UNSUPPORTED {
+            throw LZMAError.unsupported
+        }
         if result != 0 {
             throw LZMAError.badFile
         }

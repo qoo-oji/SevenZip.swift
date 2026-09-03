@@ -85,6 +85,7 @@ let package = Package(
                 "7zCrc.c",
                 "7zCrcOpt.c",
                 "7zDec.c",
+                "7zFolderStream.c",
                 "CpuArch.c",
                 "Delta.c",
                 "LzmaDec.c",
@@ -99,13 +100,18 @@ let package = Package(
                 "7zStream.c",
             ],
             cSettings: [
+                // 7zDec.c leaves PPMd out unless asked; Ppmd7.c/Ppmd7Dec.c are compiled anyway.
+                .define("Z7_PPMD_SUPPORT"),
                 // .define("_SZ_ALLOC_DEBUG") // if you want to debug alloc/free operations to stderr.
                 .unsafeFlags(["-mcrc"], .when(platforms: [.iOS]))
             ]
         ),
+        .executableTarget(
+            name: "sevenzip-bench",
+            dependencies: ["SevenZip"]),
         .testTarget(
             name: "SevenZipTests",
             dependencies: ["SevenZip"],
-            resources: [.process("fixture")]),
+            resources: [.process("fixture"), .copy("streaming-fixture")]),
     ]
 )
