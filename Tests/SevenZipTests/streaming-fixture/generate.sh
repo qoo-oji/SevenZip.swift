@@ -4,7 +4,7 @@
 # even though 7zz may write different bytes between versions.
 set -e
 cd "$(dirname "$0")"
-rm -rf src src_big && mkdir -p src/dir src_big
+rm -rf src src_big src_tail && mkdir -p src/dir src_big src_tail
 python3 - <<'PY'
 import random, os
 r = random.Random(20260903)
@@ -42,12 +42,28 @@ for _ in range(30000):
     v = max(-32000, min(32000, v + r.randint(-40, 40)))
     pcm += v.to_bytes(2, "little", signed=True)
 open("wave.pcm","wb").write(pcm)
+# filter tails: blocks whose last 256 KB refill leaves fewer bytes than one instruction
+# (2 bytes after a 256 KB fill, and 2- / 3-byte blocks). Used with -ms=off so that each
+# file is its own block.
+arm = bytearray()
+while len(arm) < 262146:
+    arm += ((0x94000000 | r.getrandbits(16)) if r.random() < 0.2 else r.getrandbits(32)).to_bytes(4, "little")
+open("../src_tail/arm_tail.bin","wb").write(arm[:262146])
+x86 = bytearray()
+while len(x86) < 262146:
+    if r.random() < 0.2:
+        x86 += b"\xE8" + r.getrandbits(16).to_bytes(4, "little")
+    else:
+        x86.append(r.getrandbits(8))
+open("../src_tail/x86_tail.bin","wb").write(x86[:262146])
+open("../src_tail/tiny2.bin","wb").write(bytes([0x94, 0x00]))
+open("../src_tail/tiny3.bin","wb").write(bytes([0xE8, 0x01, 0x02]))
 open("empty.txt","wb").close()
 open("日本語 名前.txt","w").write("日本語の内容\n" * 100)
 # manifest: relative path -> sha256, the oracle the tests compare against
 import hashlib, json
 m = {}
-for base in (".", "../src_big"):
+for base in (".", "../src_big", "../src_tail"):
     for root, _, files in os.walk(base):
         for fn in files:
             full = os.path.join(root, fn)
@@ -68,6 +84,9 @@ mk bcj2_lzma2       -mf=bcj2 -ms=on             # falls back to the non-streamin
 mk bzip2            -m0=bzip2 -ms=on            # falls back to the non-streaming path
 mk deflate          -m0=deflate
 mk header_plain     -m0=lzma2 -ms=on -mhc=off   # uncompressed header
+mk small_dict       -m0=lzma2 -md=64k -ms=on    # dictionary smaller than the block: SeekBack beyond it must restart
+rm -f filter_tail_arm64.7z; 7zz a -bso0 -bsp0 filter_tail_arm64.7z ./src_tail/. -mf=arm64 -ms=off
+rm -f filter_tail_bcj.7z;   7zz a -bso0 -bsp0 filter_tail_bcj.7z   ./src_tail/. -mf=bcj   -ms=off
 rm -f bcj_boundary.7z; 7zz a -bso0 -bsp0 bcj_boundary.7z ./src_big/. -mf=bcj -ms=on   # filter refill boundaries inside filtered data
-rm -rf src src_big
+rm -rf src src_big src_tail
 ls -la *.7z

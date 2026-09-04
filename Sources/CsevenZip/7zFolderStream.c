@@ -68,6 +68,7 @@ struct CSzFolderStream_
   ISeekInStreamPtr inStream;
 
   /* --- packed input (exactly one pack stream for the supported chains) --- */
+  UInt64 packStart; /* absolute file offset of the pack stream (SeekBack on Copy) */
   UInt64 packPos;   /* absolute file offset of the next byte to fetch into inBuf */
   UInt64 packEnd;   /* absolute file offset one past the pack stream */
   Byte *inBuf;
@@ -100,10 +101,12 @@ struct CSzFolderStream_
 
   /* --- folder output --- */
   UInt64 unpackSize;
-  UInt64 position;
+  UInt64 position;  /* bytes decoded so far (the decoder's position) */
+  UInt64 readPos;   /* bytes handed out so far; < position while replaying after a SeekBack */
   BoolInt hasCrc;
   UInt32 expectedCrc;
   UInt32 crc;
+  UInt64 crcPos;    /* position up to which crc has been accumulated (Copy can re-decode) */
 
   Byte *skipBuf;
 };
@@ -258,55 +261,160 @@ static SRes DecodeMain(CSzFolderStream *p, Byte *dest, size_t *size)
    output, runs the filter, and exposes the processed prefix as ready bytes. */
 static SRes FillFilter(CSzFolderStream *p)
 {
-  size_t total, fresh;
   Byte *buf = p->filtBuf;
-  Byte *stop;
-
-  const size_t pending = p->pendingEnd - p->pendingPos;
-  if (pending != 0 && p->pendingPos != 0)
-    memmove(buf, buf + p->pendingPos, pending);
-  p->pendingPos = 0;
-  p->pendingEnd = pending;
-  p->readyPos = p->readyEnd = 0;
-
-  fresh = FILTER_BUF_SIZE - pending;
-  RINOK(DecodeMain(p, buf + pending, &fresh))
-  total = pending + fresh;
-
-  if (fresh == 0)
+  for (;;)
   {
-    /* End of the main coder: whatever the filter left unprocessed is passed through. */
-    p->readyEnd = total;
-    p->pendingPos = p->pendingEnd = 0;
+    size_t total, fresh;
+    Byte *stop;
+
+    const size_t pending = p->pendingEnd - p->pendingPos;
+    if (pending != 0 && p->pendingPos != 0)
+      memmove(buf, buf + p->pendingPos, pending);
+    p->pendingPos = 0;
+    p->pendingEnd = pending;
+    p->readyPos = p->readyEnd = 0;
+
+    fresh = FILTER_BUF_SIZE - pending;
+    RINOK(DecodeMain(p, buf + pending, &fresh))
+    total = pending + fresh;
+
+    if (fresh == 0)
+    {
+      /* End of the main coder: whatever the filter left unprocessed is passed through
+         (SzFolder_Decode2 and XzDec likewise leave a tail shorter than one instruction
+         untouched). */
+      p->readyEnd = total;
+      p->pendingPos = p->pendingEnd = 0;
+      return SZ_OK;
+    }
+
+    switch (p->filterMethod)
+    {
+      case k_Delta:
+        Delta_Decode(p->deltaState, p->delta, buf, total);
+        stop = buf + total;
+        break;
+      case k_BCJ:   stop = z7_BranchConvSt_X86_Dec(buf, total, p->pc, &p->x86State); break;
+      case k_PPC:   stop = z7_BranchConv_PPC_Dec(buf, total, p->pc); break;
+      case k_IA64:  stop = z7_BranchConv_IA64_Dec(buf, total, p->pc); break;
+      case k_ARM:   stop = z7_BranchConv_ARM_Dec(buf, total, p->pc); break;
+      case k_ARMT:  stop = z7_BranchConv_ARMT_Dec(buf, total, p->pc); break;
+      case k_SPARC: stop = z7_BranchConv_SPARC_Dec(buf, total, p->pc); break;
+      case k_ARM64: stop = z7_BranchConv_ARM64_Dec(buf, total, p->pc); break;
+      case k_RISCV: stop = z7_BranchConv_RISCV_Dec(buf, total, p->pc); break;
+      default:
+        return SZ_ERROR_UNSUPPORTED;
+    }
+
+    {
+      const size_t processed = (size_t)(stop - buf);
+      if (processed == 0)
+      {
+        /* The buffer holds less than the filter's look-ahead. That only happens near the
+           end of the block (a tail of a few bytes after a 256KB fill, or a block that is
+           tiny to begin with), and returning zero ready bytes here would make
+           SzFolderStream_Read report a premature end of input. Keep the bytes pending
+           and fetch more; if the main coder is exhausted the next iteration passes them
+           through. */
+        p->pendingEnd = total;
+        continue;
+      }
+      p->pc += (UInt32)processed;
+      p->readyEnd = processed;
+      p->pendingPos = processed;
+      p->pendingEnd = total;
+    }
     return SZ_OK;
   }
+}
 
-  switch (p->filterMethod)
-  {
-    case k_Delta:
-      Delta_Decode(p->deltaState, p->delta, buf, total);
-      stop = buf + total;
-      break;
-    case k_BCJ:   stop = z7_BranchConvSt_X86_Dec(buf, total, p->pc, &p->x86State); break;
-    case k_PPC:   stop = z7_BranchConv_PPC_Dec(buf, total, p->pc); break;
-    case k_IA64:  stop = z7_BranchConv_IA64_Dec(buf, total, p->pc); break;
-    case k_ARM:   stop = z7_BranchConv_ARM_Dec(buf, total, p->pc); break;
-    case k_ARMT:  stop = z7_BranchConv_ARMT_Dec(buf, total, p->pc); break;
-    case k_SPARC: stop = z7_BranchConv_SPARC_Dec(buf, total, p->pc); break;
-    case k_ARM64: stop = z7_BranchConv_ARM64_Dec(buf, total, p->pc); break;
-    case k_RISCV: stop = z7_BranchConv_RISCV_Dec(buf, total, p->pc); break;
-    default:
-      return SZ_ERROR_UNSUPPORTED;
-  }
 
+/* ---- moving backwards ---- */
+
+/* The LZMA decoder shared by the LZMA and LZMA2 coders, or NULL. */
+static const CLzmaDec *MainLzmaDec(const CSzFolderStream *p)
+{
+  if (p->mainKind == MAIN_LZMA)
+    return &p->lzma;
+  if (p->mainKind == MAIN_LZMA2)
+    return &p->lzma2.decoder;
+  return NULL;
+}
+
+/* How many of the most recently decoded bytes can be handed out again without decoding.
+   The LZMA dictionary is a ring holding the last dicBufSize bytes of the main coder's
+   output; with a filter in the chain those bytes are not the folder's output, so 0. */
+static UInt64 HistoryLength(const CSzFolderStream *p)
+{
+  const CLzmaDec *d = MainLzmaDec(p);
+  if (!d || p->filterMethod != 0)
+    return 0;
+  return ((UInt64)d->dicBufSize < p->mainProduced) ? (UInt64)d->dicBufSize : p->mainProduced;
+}
+
+/* Copies the `n` bytes that lie `back` bytes behind the decoder out of the dictionary ring.
+   Requires n <= back <= HistoryLength(p). */
+static void ReplayFromDictionary(const CSzFolderStream *p, Byte *dest, size_t n, UInt64 back)
+{
+  const CLzmaDec *d = MainLzmaDec(p);
+  const SizeT dicBufSize = d->dicBufSize;
+  /* dicPos may equal dicBufSize right after a lap (LzmaDec_DecodeToBuf wraps lazily). */
+  const SizeT start = (SizeT)((d->dicPos + dicBufSize - (SizeT)back) % dicBufSize);
+  SizeT first = dicBufSize - start;
+  if (first > n)
+    first = n;
+  memcpy(dest, d->dic + start, first);
+  if (n > first)
+    memcpy(dest + first, d->dic, n - first);
+}
+
+BoolInt SzFolderStream_CanSeekBack(const CSzFolderStream *p, UInt64 position)
+{
+  if (position > p->readPos)
+    return False;
+  if (p->mainKind == MAIN_COPY && p->filterMethod == 0)
+    return True;
+  return p->position - position <= HistoryLength(p);
+}
+
+SRes SzFolderStream_SeekBack(CSzFolderStream *p, UInt64 position)
+{
+  if (!SzFolderStream_CanSeekBack(p, position))
+    return SZ_ERROR_PARAM;
+  if (p->mainKind == MAIN_COPY)
   {
-    const size_t processed = (size_t)(stop - buf);
-    p->pc += (UInt32)processed;
-    p->readyEnd = processed;
-    p->pendingPos = processed;
-    p->pendingEnd = total;
+    /* A Copy block is the pack stream itself: re-position the input. FillInput seeks
+       before every read, so dropping the buffered input is all that is needed. */
+    p->packPos = p->packStart + position;
+    p->inPos = p->inSize = 0;
+    p->mainProduced = position;
+    p->position = position;
   }
+  p->readPos = position;
   return SZ_OK;
+}
+
+size_t SzFolderStream_GetResidentBytes(const CSzFolderStream *p)
+{
+  size_t n = sizeof(*p) + IN_BUF_SIZE
+      + (p->filtBuf ? FILTER_BUF_SIZE : 0)
+      + (p->skipBuf ? SKIP_BUF_SIZE : 0);
+  switch (p->mainKind)
+  {
+    case MAIN_LZMA:
+    case MAIN_LZMA2:
+    {
+      const CLzmaDec *d = MainLzmaDec(p);
+      n += d->dicBufSize + (size_t)d->numProbs * sizeof(CLzmaProb);
+      break;
+    }
+    case MAIN_PPMD:
+      n += p->ppmd.Size;
+      break;
+    default:
+      break;
+  }
+  return n;
 }
 
 
@@ -316,10 +424,24 @@ SRes SzFolderStream_Read(CSzFolderStream *p, Byte *dest, size_t *size)
 {
   size_t want = *size;
   size_t produced = 0;
-  const UInt64 remaining = p->unpackSize - p->position;
+  size_t replayed = 0;
+  const UInt64 remaining = p->unpackSize - p->readPos;
   if ((UInt64)want > remaining)
     want = (size_t)remaining;
   *size = 0;
+
+  if (p->readPos < p->position)
+  {
+    /* Behind the decoder after SzFolderStream_SeekBack: hand out dictionary bytes. Only
+       when the read reaches the decoder's position does decoding continue below. */
+    const UInt64 back = p->position - p->readPos;
+    size_t n = want;
+    if ((UInt64)n > back)
+      n = (size_t)back;
+    ReplayFromDictionary(p, dest, n, back);
+    p->readPos += n;
+    produced = replayed = n;
+  }
 
   while (produced < want)
   {
@@ -349,19 +471,29 @@ SRes SzFolderStream_Read(CSzFolderStream *p, Byte *dest, size_t *size)
     }
   }
 
-  if (p->hasCrc && produced != 0)
-    p->crc = CrcUpdate(p->crc, dest, produced);
-  p->position += produced;
+  {
+    const size_t decoded = produced - replayed;
+    /* Bytes enter the CRC the first time they are decoded. After SeekBack on a Copy block
+       the decoder produces earlier bytes again; those are skipped until it catches up. */
+    if (p->hasCrc && p->position <= p->crcPos && p->crcPos < p->position + decoded)
+    {
+      const size_t seen = (size_t)(p->crcPos - p->position);
+      p->crc = CrcUpdate(p->crc, dest + replayed + seen, decoded - seen);
+      p->crcPos += decoded - seen;
+    }
+    p->position += decoded;
+    p->readPos += decoded;
+  }
   *size = produced;
 
-  if (p->hasCrc && p->position == p->unpackSize && CRC_GET_DIGEST(p->crc) != p->expectedCrc)
+  if (p->hasCrc && p->crcPos == p->unpackSize && CRC_GET_DIGEST(p->crc) != p->expectedCrc)
     return SZ_ERROR_CRC;
   return SZ_OK;
 }
 
 SRes SzFolderStream_Skip(CSzFolderStream *p, UInt64 size)
 {
-  if (size > p->unpackSize - p->position)
+  if (size > p->unpackSize - p->readPos)
     return SZ_ERROR_INPUT_EOF;
   if (!p->skipBuf)
   {
@@ -382,7 +514,7 @@ SRes SzFolderStream_Skip(CSzFolderStream *p, UInt64 size)
   return SZ_OK;
 }
 
-UInt64 SzFolderStream_GetPosition(const CSzFolderStream *p) { return p->position; }
+UInt64 SzFolderStream_GetPosition(const CSzFolderStream *p) { return p->readPos; }
 UInt64 SzFolderStream_GetUnpackSize(const CSzFolderStream *p) { return p->unpackSize; }
 
 void SzFolderStream_Free(CSzFolderStream *p)
@@ -574,7 +706,8 @@ SRes SzFolderStream_Create(CSzFolderStream **result,
   p->inStream = inStream;
   p->unpackSize = SzAr_GetFolderUnpackSize(ar, folderIndex);
   p->mainUnpackSize = unpackSizes[0];
-  p->packPos = db->dataPos + packPositions[0];
+  p->packStart = db->dataPos + packPositions[0];
+  p->packPos = p->packStart;
   p->packEnd = db->dataPos + packPositions[1];
   p->mainKind = -1;
   if (SzBitWithVals_Check(&ar->FolderCRCs, folderIndex))

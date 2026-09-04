@@ -42,12 +42,15 @@ public class Archive {
     }
     private var lookStream = CLookToRead2()
     private var blockIndex: UInt32 = 0xFFFF_FFFF  // it can have any value before first call (if outBuffer = 0)
-    private var outBuffer = UnsafeMutablePointer<UInt8>(bitPattern: 0)
-    private var outBufferSize: Int = 0  // it can have any value before first call (if outBuffer = 0)
+    var outBuffer = UnsafeMutablePointer<UInt8>(bitPattern: 0)
+    var outBufferSize: Int = 0  // it can have any value before first call (if outBuffer = 0)
     /// Streaming decoder of the block that was read from most recently (see ArchiveStreaming.swift).
     /// Kept between calls so that reading the files of a solid block in order decodes the block once.
     var folderStream: OpaquePointer?
     var folderStreamIndex: UInt32 = 0
+    /// How many times a streaming decoder was (re)created from a block's start. For tests:
+    /// reading backwards within the dictionary must not increase it.
+    var folderStreamRestartCount = 0
 
     public init(fileURL: URL) throws {
         _ = moduleInit

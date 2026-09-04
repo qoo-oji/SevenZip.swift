@@ -17,6 +17,11 @@ UInt64 SevenZip_SzArEx_GetFileSize(const CSzArEx *p, UInt32 fileIndex) {
 }
 
 // #define SzBitWithVals_Check(p, i) ((p)->Defs && ((p)->Defs[(i) >> 3] & (0x80 >> ((i) & 7))) != 0)
+// Same check for the 32-bit table (the per-file CRCs, CSzArEx.CRCs).
+static inline int SevenZip_SzBitUi32s_Check(const CSzBitUi32s *p, UInt32 i) {
+    return SzBitWithVals_Check(p, i);
+}
+
 int SevenZip_SzBitWithVals_Check(const CSzBitUi64s *p, UInt32 i) {
     return SzBitWithVals_Check(p, i);
 }

@@ -10,6 +10,7 @@ final class StreamingTests: XCTestCase {
     private static let streamingArchives = [
         "lzma2_solid", "lzma_solid", "ppmd_solid", "lzma2_nonsolid", "copy",
         "delta_lzma2", "bcj_lzma2", "arm64_lzma2", "multiblock", "header_plain", "bcj_boundary",
+        "filter_tail_arm64", "filter_tail_bcj", "small_dict",
     ]
     /// Coder chains the streaming decoder hands over to `extract(entry:)`.
     private static let fallbackArchives = ["bcj2_lzma2"]
