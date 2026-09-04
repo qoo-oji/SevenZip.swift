@@ -76,6 +76,40 @@ final class SeekBackTests: XCTestCase {
         }
     }
 
+    /// With a history ring, backward reads are free beyond the dictionary and for every
+    /// coder kind (filtered blocks, PPMd), and the ring is not allocated where the
+    /// dictionary already covers it.
+    func testHistoryRingExtendsBackwardReads() throws {
+        for name in ["small_dict", "bcj_lzma2", "arm64_lzma2", "delta_lzma2", "ppmd_solid", "lzma_solid"] {
+            let archive = try openArchive(name)
+            archive.historyByteCount = 1 << 20 // larger than every fixture block
+            let files = archive.entries.filter { !$0.directory && $0.uncompressedSize > 0 }
+            for entry in files.reversed() {
+                try assertMatchesManifest(archive, entry, name)
+            }
+            let k = files.count / 2
+            for i in [k, k + 1, k - 1, k + 2, k - 2] where files.indices.contains(i) {
+                try assertMatchesManifest(archive, files[i], name)
+            }
+            XCTAssertEqual(archive.folderStreamRestartCount, 1, name)
+            let total = files.reduce(0) { $0 + Int($1.uncompressedSize) }
+            if name == "lzma_solid" {
+                // 16 MB dictionary covers the 1 MB window: no ring, only the decoder itself.
+                XCTAssertLessThan(archive.residentDecoderBytes, 1 << 20 + (1 << 24) + (1 << 19), name)
+            } else {
+                // ring capped at the block size
+                XCTAssertGreaterThanOrEqual(archive.residentDecoderBytes, min(total, 1 << 20), name)
+            }
+        }
+        // A ring smaller than the distance still restarts (and stays correct).
+        let archive = try openArchive("small_dict")
+        archive.historyByteCount = 4096
+        let files = archive.entries.filter { !$0.directory && $0.uncompressedSize > 0 }
+        try assertMatchesManifest(archive, files.last!, "small_dict")
+        try assertMatchesManifest(archive, files.first!, "small_dict")
+        XCTAssertEqual(archive.folderStreamRestartCount, 2)
+    }
+
     /// Filtered blocks have no usable history (the dictionary holds unfiltered bytes) but
     /// must still read correctly backwards.
     func testFilteredBlocksReadBackwards() throws {

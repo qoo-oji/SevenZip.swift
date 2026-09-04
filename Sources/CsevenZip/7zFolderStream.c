@@ -108,6 +108,11 @@ struct CSzFolderStream_
   UInt32 crc;
   UInt64 crcPos;    /* position up to which crc has been accumulated (Copy can re-decode) */
 
+  /* --- history ring: the most recent histSize bytes of folder output (optional) --- */
+  Byte *hist;
+  size_t histSize;
+  size_t histPos;   /* next write index */
+
   Byte *skipBuf;
 };
 
@@ -341,10 +346,10 @@ static const CLzmaDec *MainLzmaDec(const CSzFolderStream *p)
   return NULL;
 }
 
-/* How many of the most recently decoded bytes can be handed out again without decoding.
-   The LZMA dictionary is a ring holding the last dicBufSize bytes of the main coder's
-   output; with a filter in the chain those bytes are not the folder's output, so 0. */
-static UInt64 HistoryLength(const CSzFolderStream *p)
+/* How many of the most recently decoded bytes the LZMA dictionary can hand out again. It is
+   a ring holding the last dicBufSize bytes of the main coder's output; with a filter in the
+   chain those bytes are not the folder's output, so 0. */
+static UInt64 DictionaryHistory(const CSzFolderStream *p)
 {
   const CLzmaDec *d = MainLzmaDec(p);
   if (!d || p->filterMethod != 0)
@@ -352,20 +357,67 @@ static UInt64 HistoryLength(const CSzFolderStream *p)
   return ((UInt64)d->dicBufSize < p->mainProduced) ? (UInt64)d->dicBufSize : p->mainProduced;
 }
 
-/* Copies the `n` bytes that lie `back` bytes behind the decoder out of the dictionary ring.
-   Requires n <= back <= HistoryLength(p). */
-static void ReplayFromDictionary(const CSzFolderStream *p, Byte *dest, size_t n, UInt64 back)
+/* How many of the most recently produced bytes the history ring holds. */
+static UInt64 RingHistory(const CSzFolderStream *p)
 {
-  const CLzmaDec *d = MainLzmaDec(p);
-  const SizeT dicBufSize = d->dicBufSize;
-  /* dicPos may equal dicBufSize right after a lap (LzmaDec_DecodeToBuf wraps lazily). */
-  const SizeT start = (SizeT)((d->dicPos + dicBufSize - (SizeT)back) % dicBufSize);
-  SizeT first = dicBufSize - start;
+  if (!p->hist)
+    return 0;
+  return ((UInt64)p->histSize < p->position) ? (UInt64)p->histSize : p->position;
+}
+
+static UInt64 HistoryLength(const CSzFolderStream *p)
+{
+  const UInt64 a = DictionaryHistory(p);
+  const UInt64 b = RingHistory(p);
+  return a > b ? a : b;
+}
+
+/* Copies n bytes that end `back` bytes before the write position of a ring buffer. */
+static void CopyFromRing(const Byte *ring, size_t ringSize, size_t writePos, Byte *dest, size_t n, UInt64 back)
+{
+  /* writePos may equal ringSize right after a lap (LzmaDec_DecodeToBuf wraps lazily). */
+  const size_t start = (size_t)((writePos + ringSize - (size_t)back) % ringSize);
+  size_t first = ringSize - start;
   if (first > n)
     first = n;
-  memcpy(dest, d->dic + start, first);
+  memcpy(dest, ring + start, first);
   if (n > first)
-    memcpy(dest + first, d->dic, n - first);
+    memcpy(dest + first, ring, n - first);
+}
+
+/* Copies the `n` bytes that lie `back` bytes behind the decoder out of the history ring or
+   the dictionary. Requires n <= back <= HistoryLength(p). */
+static void ReplayHistory(const CSzFolderStream *p, Byte *dest, size_t n, UInt64 back)
+{
+  if (back <= RingHistory(p))
+    CopyFromRing(p->hist, p->histSize, p->histPos, dest, n, back);
+  else
+  {
+    const CLzmaDec *d = MainLzmaDec(p);
+    CopyFromRing(d->dic, d->dicBufSize, d->dicPos, dest, n, back);
+  }
+}
+
+/* Appends freshly decoded folder output to the history ring. */
+static void HistoryPush(CSzFolderStream *p, const Byte *src, size_t n)
+{
+  if (!p->hist || n == 0)
+    return;
+  if (n >= p->histSize)
+  {
+    memcpy(p->hist, src + (n - p->histSize), p->histSize);
+    p->histPos = 0;
+    return;
+  }
+  {
+    size_t first = p->histSize - p->histPos;
+    if (first > n)
+      first = n;
+    memcpy(p->hist + p->histPos, src, first);
+    if (n > first)
+      memcpy(p->hist, src + first, n - first);
+    p->histPos = (p->histPos + n) % p->histSize;
+  }
 }
 
 BoolInt SzFolderStream_CanSeekBack(const CSzFolderStream *p, UInt64 position)
@@ -398,7 +450,8 @@ size_t SzFolderStream_GetResidentBytes(const CSzFolderStream *p)
 {
   size_t n = sizeof(*p) + IN_BUF_SIZE
       + (p->filtBuf ? FILTER_BUF_SIZE : 0)
-      + (p->skipBuf ? SKIP_BUF_SIZE : 0);
+      + (p->skipBuf ? SKIP_BUF_SIZE : 0)
+      + (p->hist ? p->histSize : 0);
   switch (p->mainKind)
   {
     case MAIN_LZMA:
@@ -438,7 +491,7 @@ SRes SzFolderStream_Read(CSzFolderStream *p, Byte *dest, size_t *size)
     size_t n = want;
     if ((UInt64)n > back)
       n = (size_t)back;
-    ReplayFromDictionary(p, dest, n, back);
+    ReplayHistory(p, dest, n, back);
     p->readPos += n;
     produced = replayed = n;
   }
@@ -481,6 +534,7 @@ SRes SzFolderStream_Read(CSzFolderStream *p, Byte *dest, size_t *size)
       p->crc = CrcUpdate(p->crc, dest + replayed + seen, decoded - seen);
       p->crcPos += decoded - seen;
     }
+    HistoryPush(p, dest + replayed, decoded);
     p->position += decoded;
     p->readPos += decoded;
   }
@@ -533,6 +587,7 @@ void SzFolderStream_Free(CSzFolderStream *p)
   ISzAlloc_Free(alloc, p->inBuf);
   ISzAlloc_Free(alloc, p->filtBuf);
   ISzAlloc_Free(alloc, p->skipBuf);
+  ISzAlloc_Free(alloc, p->hist);
   ISzAlloc_Free(alloc, p);
 }
 
@@ -671,6 +726,7 @@ SRes SzFolderStream_Create(CSzFolderStream **result,
     const CSzArEx *db,
     ISeekInStreamPtr inStream,
     UInt32 folderIndex,
+    size_t historyBytes,
     ISzAllocPtr alloc)
 {
   const CSzAr *ar = &db->db;
@@ -731,6 +787,25 @@ SRes SzFolderStream_Create(CSzFolderStream **result,
         packPositions[1] - packPositions[0]);
   if (res == SZ_OK && folder.NumCoders == 2)
     res = InitFilter(p, &folder.Coders[1], codersData + folder.Coders[1].PropsOffset);
+  if (res == SZ_OK && historyBytes != 0)
+  {
+    /* The ring is only worth its memory when it reaches further back than what is free
+       anyway: the whole block (Copy re-positions the input) or the dictionary (unfiltered
+       LZMA / LZMA2). */
+    const CLzmaDec *d = MainLzmaDec(p);
+    const BoolInt covered = (p->mainKind == MAIN_COPY && p->filterMethod == 0)
+        || (d && p->filterMethod == 0 && (UInt64)d->dicBufSize >= (UInt64)historyBytes);
+    if (!covered)
+    {
+      if ((UInt64)historyBytes > p->unpackSize)
+        historyBytes = (size_t)p->unpackSize; /* no point holding more than the block */
+      p->hist = (Byte *)ISzAlloc_Alloc(alloc, historyBytes);
+      if (!p->hist)
+        res = SZ_ERROR_MEM;
+      else
+        p->histSize = historyBytes;
+    }
+  }
 
   if (res != SZ_OK)
   {

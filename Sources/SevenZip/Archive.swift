@@ -51,6 +51,18 @@ public class Archive {
     /// How many times a streaming decoder was (re)created from a block's start. For tests:
     /// reading backwards within the dictionary must not increase it.
     var folderStreamRestartCount = 0
+    /// How far back `read(entry:)` / `readData(entry:)` can move inside a solid block without
+    /// decoding it again from its start, in bytes of unpacked data (0 by default).
+    ///
+    /// Reading backwards is free within the LZMA dictionary (typically 16–64 MB, unfiltered
+    /// LZMA / LZMA2 only) and anywhere in a stored block. A reader that walks backwards —
+    /// a viewer whose prefetch reaches several pages behind the page on screen — needs a
+    /// window larger than a 16 MB dictionary; set this to have the decoder keep that much
+    /// of its most recent output (for every coder kind) in a ring buffer. The memory is
+    /// only allocated when the block's dictionary does not already cover the window, and
+    /// never more than the block's size. Takes effect the next time a block's decoder is
+    /// created (`discardFolderStream()` forces that).
+    public var historyByteCount: Int = 0
 
     public init(fileURL: URL) throws {
         _ = moduleInit

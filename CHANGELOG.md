@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Add streaming extraction with bounded memory: `Archive.read(entry:chunkSize:_:)`, `Archive.readData(entry:maxByteCount:)`, `Archive.discardFolderStream()`, `Archive.residentDecoderBytes`
-  - Reading backwards within the LZMA dictionary (or anywhere in a stored block) reuses the decoder instead of restarting the block
+  - Reading backwards within the LZMA dictionary, within `Archive.historyByteCount` of recent output, or anywhere in a stored block reuses the decoder instead of restarting the block
   - The entry's CRC is verified on a complete read, as `extract(entry:)` does
   - Fix a spurious end-of-input error on filtered (BCJ / ARM64 / ...) blocks whose tail is shorter than one instruction
 - Decode PPMd-compressed blocks (`Z7_PPMD_SUPPORT`)
