@@ -59,10 +59,9 @@ archive.discardFolderStream()
 
 Memory stays at the LZMA dictionary size plus a few hundred KB (`residentDecoderBytes`
 reports it). Jumping backwards inside a solid block is free while the target is still in
-the decoder's dictionary (the last 16–64 MB, typically), within the history window you
-asked for with `archive.historyByteCount`, or the block is stored; further back, the
-block is decoded again from its start (solid blocks are one stream), so read in archive
-order where you can. Every entry's CRC is verified on a complete read, as
+the decoder's dictionary (the last 16–64 MB, typically) or the block is stored; further
+back, the block is decoded again from its start (solid blocks are one stream), so read
+in archive order where you can. Every entry's CRC is verified on a complete read, as
 `extract(entry:)` does.
 Blocks using BCJ2 fall back to `extract(entry:)`; BZip2/Deflate/AES blocks are not
 supported by either path. PPMd is supported by both.

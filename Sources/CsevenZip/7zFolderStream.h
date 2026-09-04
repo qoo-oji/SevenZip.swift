@@ -20,15 +20,12 @@ through to its end, because every byte -- including skipped ones -- passes throu
 `SzFolderStream_Read`.
 
 Moving backwards: a solid block is one stream, so in general an earlier position can only
-be reached by decoding the block again from its start. `SzFolderStream_SeekBack` avoids
-that in three cases: a Copy block is the pack stream itself (the input is simply
-re-positioned); for LZMA / LZMA2 without a branch filter the decoder's dictionary already
-holds the most recent `dicSize` bytes of output, which are handed out again without
-decoding ("replay"); and the caller may ask for a history ring of `historyBytes` that keeps
-the most recent output of any block kind (this is the window a viewer reading backwards
-page by page needs: its prefetch reaches further back than a 16 MB dictionary).
-`SzFolderStream_CanSeekBack` tells whether a position is reachable that way; otherwise the
-caller creates a new stream. */
+be reached by decoding the block again from its start. Two cases are cheaper and handled
+by `SzFolderStream_SeekBack`: a Copy block is the pack stream itself (the input is simply
+re-positioned), and for LZMA / LZMA2 without a branch filter the decoder's dictionary
+already holds the most recent `dicSize` bytes of output, which are handed out again
+without decoding ("replay"). `SzFolderStream_CanSeekBack` tells whether a position is
+reachable that way; otherwise the caller creates a new stream. */
 
 #ifndef ZIP7_INC_7Z_FOLDER_STREAM_H
 #define ZIP7_INC_7Z_FOLDER_STREAM_H
@@ -47,7 +44,6 @@ SRes SzFolderStream_Create(CSzFolderStream **result,
     const CSzArEx *db,
     ISeekInStreamPtr inStream,
     UInt32 folderIndex,
-    size_t historyBytes,
     ISzAllocPtr alloc);
 
 /* Produces up to *size bytes into dest. On return *size is the number of bytes
@@ -65,7 +61,7 @@ UInt64 SzFolderStream_GetPosition(const CSzFolderStream *p);
 
 /* Whether `position` (<= the current read position) can be reached without decoding the
    block again: always for a Copy block; within the dictionary for LZMA / LZMA2 without a
-   filter; within the history ring when one was requested (see the header comment). */
+   filter (see the header comment). Never for PPMd or filtered blocks. */
 BoolInt SzFolderStream_CanSeekBack(const CSzFolderStream *p, UInt64 position);
 
 /* Moves the read position back to `position`. Fails with SZ_ERROR_PARAM when
