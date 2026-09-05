@@ -87,6 +87,8 @@ public class Archive {
             self.allocImp.Free(nil, pointee)
         }
         SzArEx_Free(&self.db, &self.allocImp)
+        // InFile_Open opened the file in init; nothing else closes it.
+        File_Close(&self.archiveStream.pointee.file)
         self.archiveStream.deinitialize(count: 1)
         self.archiveStream.deallocate()
     }
