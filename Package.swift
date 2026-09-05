@@ -99,8 +99,11 @@ let package = Package(
                 "7zStream.c",
             ],
             cSettings: [
+                // 7zDec.c compiles the PPMd coder in only when this is defined; Ppmd7.c and
+                // Ppmd7Dec.c are already part of the target's sources.
+                .define("Z7_PPMD_SUPPORT"),
                 // .define("_SZ_ALLOC_DEBUG") // if you want to debug alloc/free operations to stderr.
-                .unsafeFlags(["-mcrc"], .when(platforms: [.iOS]))
+                .unsafeFlags(["-mcrc"], .when(platforms: [.iOS])),
             ]
         ),
         .testTarget(
