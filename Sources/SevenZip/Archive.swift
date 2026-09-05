@@ -69,11 +69,17 @@ public class Archive {
             }
             let filesize = SevenZip_SzArEx_GetFileSize(&self.db, i)
             let isDirectory = SevenZip_SzArEx_IsDir(&self.db, i) != 0
+            // SzBitWithVals_Check returns non-zero when the file HAS the value (7z.h), so this
+            // has to be `!= 0`; `Vals` itself is NULL when no file in the archive has one.
             let mtime: Date?
-            if SevenZip_SzBitWithVals_Check(&db.MTime, i) == 0 {
-                let high: UInt64 = UInt64(db.MTime.Vals[Int(i)].High)
-                let low: UInt64 = UInt64(db.MTime.Vals[Int(i)].Low)
-                mtime = Date(timeIntervalSince1970: TimeInterval((high << 32 | low) / 10_000_000 - UInt64(11_644_473_600)))
+            if SevenZip_SzBitWithVals_Check(&db.MTime, i) != 0, let values = db.MTime.Vals {
+                let high = UInt64(values[Int(i)].High)
+                let low = UInt64(values[Int(i)].Low)
+                // FILETIME: 100-ns ticks since 1601-01-01. Computed in Double so that a timestamp
+                // before 1970 does not underflow (the UInt64 subtraction traps) and the sub-second
+                // part survives.
+                let ticks = Double(high << 32 | low)
+                mtime = Date(timeIntervalSince1970: ticks / 10_000_000 - 11_644_473_600)
             } else {
                 mtime = nil
             }
