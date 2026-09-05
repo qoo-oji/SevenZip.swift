@@ -48,9 +48,13 @@ public class Archive {
     /// Kept between calls so that reading the files of a solid block in order decodes the block once.
     var folderStream: OpaquePointer?
     var folderStreamIndex: UInt32 = 0
-    /// How many times a streaming decoder was (re)created from a block's start. For tests:
-    /// reading backwards within the dictionary must not increase it.
-    var folderStreamRestartCount = 0
+    /// How many times a streaming decoder was (re)created from a block's start.
+    ///
+    /// Reading the files of a solid block in archive order decodes the block once, so this stays
+    /// at 1 for that block; seeking backwards within the dictionary must not increase it. Public
+    /// so that a client can keep its own access order honest (qooViewer regression-tests that
+    /// reading a book's pages in archive order causes no restart).
+    public internal(set) var folderStreamRestartCount = 0
 
     public init(fileURL: URL) throws {
         _ = moduleInit
@@ -115,11 +119,18 @@ public class Archive {
             }
             let filesize = SevenZip_SzArEx_GetFileSize(&self.db, i)
             let isDirectory = SevenZip_SzArEx_IsDir(&self.db, i) != 0
+            // SzBitWithVals_Check returns non-zero when the file HAS the value (7z.h). The check
+            // used to be `== 0`, which meant modified was always nil for archives that do carry
+            // timestamps -- and, for archives that do not, it read MTime.Vals while Defs was NULL.
             let mtime: Date?
-            if SevenZip_SzBitWithVals_Check(&db.MTime, i) == 0 {
-                let high: UInt64 = UInt64(db.MTime.Vals[Int(i)].High)
-                let low: UInt64 = UInt64(db.MTime.Vals[Int(i)].Low)
-                mtime = Date(timeIntervalSince1970: TimeInterval((high << 32 | low) / 10_000_000 - UInt64(11_644_473_600)))
+            if SevenZip_SzBitWithVals_Check(&db.MTime, i) != 0, let values = db.MTime.Vals {
+                let high = UInt64(values[Int(i)].High)
+                let low = UInt64(values[Int(i)].Low)
+                // FILETIME: 100-ns ticks since 1601-01-01. Compute in Double so that timestamps
+                // before 1970 do not underflow (UInt64 subtraction traps) and sub-second precision
+                // survives.
+                let ticks = Double(high << 32 | low)
+                mtime = Date(timeIntervalSince1970: ticks / 10_000_000 - 11_644_473_600)
             } else {
                 mtime = nil
             }

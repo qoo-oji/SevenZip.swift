@@ -49,6 +49,9 @@ archive.discardFolderStream()
 
 // いま保持しているデコーダのメモリ(LZMA 辞書+バッファ、および extract のブロックキャッシュ)
 let bytes = archive.residentDecoderBytes
+
+// ブロック先頭からデコーダを作り直した回数(読み方の検証用。下記「ブロックデコーダの再利用」)
+let restarts = archive.folderStreamRestartCount
 ```
 
 - 空ファイルとディレクトリは `body` を呼ばずに終了し、`readData` は空の `Data` を返します。
@@ -172,6 +175,10 @@ swift test
 `bcj_boundary.7z` は 700KB の疑似 x86 コードで、フィルタの 256KB 境界が変換対象の途中に複数回落ちる
 ケースです。
 
+`mtime.7z` / `no_mtime.7z` は `Entry.modified`(ヘッダーの FILETIME)用です。前者は
+2026-01-02 03:04:05 UTC に固定した 1 ファイル、後者は `-mtm=off` で日時を一切持たない書庫
+(`CSzArEx.MTime.Defs` が NULL になる経路)。
+
 ## ベンチ
 
 ```sh
@@ -190,6 +197,14 @@ swift build -c release
   やり直し。ブロックを**前後交互**に舐めるような読み方は辞書の外へすぐ出るので、利用側は書庫順に読むこと
   (中央から前後交互に 100 エントリ 250MB を読むと、書庫順なら 10 秒のところが 230 秒になる)。
 - `Archive` はスレッドセーフではない。
+
+## upstream から直したもの
+
+- **`Entry.modified` が常に nil だった。** `Archive.init` の
+  `SevenZip_SzBitWithVals_Check(&db.MTime, i) == 0` は条件が逆で(このマクロは値が**ある**ときに
+  非 0 を返す。`7z.h`)、日時を持つ書庫でも nil になり、逆に日時を持たない書庫では `MTime.Vals` を
+  NULL のまま読んでいた。`!= 0` と `Vals` の nil 検査へ直し、FILETIME → Unix 時間の計算も
+  1970 より前でアンダーフローしないよう Double で行うようにした(`EntryDateTests`)。
 
 ## upstream への追従
 

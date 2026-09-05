@@ -88,5 +88,14 @@ mk small_dict       -m0=lzma2 -md=64k -ms=on    # dictionary smaller than the bl
 rm -f filter_tail_arm64.7z; 7zz a -bso0 -bsp0 filter_tail_arm64.7z ./src_tail/. -mf=arm64 -ms=off
 rm -f filter_tail_bcj.7z;   7zz a -bso0 -bsp0 filter_tail_bcj.7z   ./src_tail/. -mf=bcj   -ms=off
 rm -f bcj_boundary.7z; 7zz a -bso0 -bsp0 bcj_boundary.7z ./src_big/. -mf=bcj -ms=on   # filter refill boundaries inside filtered data
-rm -rf src src_big src_tail
+# Timestamps. mtime.7z stores a fixed modification time (touch, UTC) so that the FILETIME
+# conversion has an oracle; no_mtime.7z stores none at all, which is the case where
+# CSzArEx.MTime.Defs is NULL and reading MTime.Vals would be a null dereference.
+rm -rf src_time && mkdir -p src_time
+printf 'SevenZip.swift mtime fixture\n' > src_time/hello.txt
+TZ=UTC touch -t 202601020304.05 src_time/hello.txt
+rm -f mtime.7z;    7zz a -bso0 -bsp0 mtime.7z    ./src_time/. -m0=lzma2
+rm -f no_mtime.7z; 7zz a -bso0 -bsp0 no_mtime.7z ./src_time/. -m0=lzma2 -mtm=off -mtc=off -mta=off
+
+rm -rf src src_big src_tail src_time
 ls -la *.7z
