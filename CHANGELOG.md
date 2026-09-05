@@ -9,6 +9,9 @@
 - Decode PPMd-compressed blocks (`Z7_PPMD_SUPPORT`)
 - Add `Archive(data:)` to open an archive held in memory without a temporary file
 - Close the archive file when the `Archive` is deallocated
+- Release the `Archive` when its last user lets go of it: `entries` is built on demand instead of being stored,
+  because every `Entry` holds a strong reference back to its archive and the two together formed a reference cycle
+  (an archive, its file descriptor, its index and its decoder dictionary used to stay resident for the life of the process)
 
 ## v0.2.7 (2026-06-27)
 

@@ -206,6 +206,18 @@ swift build -c release
   NULL のまま読んでいた。`!= 0` と `Vals` の nil 検査へ直し、FILETIME → Unix 時間の計算も
   1970 より前でアンダーフローしないよう Double で行うようにした(`EntryDateTests`)。
 
+- **`Archive` が一度も解放されなかった。** `Entry` は自分が属する `Archive` を強参照で持ち、
+  その `Archive` が `entries: [Entry]` を保持していたため、参照循環になって `deinit` が走らない。
+  ファイルディスクリプタ・索引・`outBuffer`、そしてフォークが足したブロックデコーダの LZMA 辞書
+  (16〜64MB)が、書庫を開くたびにプロセスの終わりまで残っていた。`entries` を格納プロパティから
+  **アクセスのたびに組み立てる計算プロパティ**へ変え、各ファイルの情報は `EntryRecord`(archive への
+  逆参照を持たない)で保持するようにした。`Entry` を持ち続ければ `Archive` が生き続けるという
+  従来の意味は変わらない(`unowned` にする案は、`Archive` を先に捨てたコードが落ちるので採らなかった)。
+  `ArchiveLifetimeTests`。
+- **`deinit` がファイルを閉じていなかった。** `InFile_Open` で開いた fd がそのまま残る
+  (上の参照循環に隠れて表に出ていなかった)。`File_Close` を呼ぶようにした
+  (`ArchiveLifetimeTests.testOpeningManyArchivesDoesNotLeakFileDescriptors`)。
+
 ## upstream への追従
 
 upstream の更新は主に LZMA SDK の差し替え(`Sources/CsevenZip/` 一式)です。`7zFolderStream.c` は SDK の公開 API
