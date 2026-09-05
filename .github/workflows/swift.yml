@@ -1,12 +1,14 @@
 name: Swift
 
+# streaming-extract is this fork's working branch (qooViewer pins it by branch +
+# revision), so it has to be built and tested here as well as main.
 on:
   push:
-    branches: [ main ]
+    branches: [ main, streaming-extract ]
     paths-ignore:
       - '*.md'
   pull_request:
-    branches: [ main ]
+    branches: [ main, streaming-extract ]
     paths-ignore:
       - '*.md'
 
