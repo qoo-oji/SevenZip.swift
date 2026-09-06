@@ -83,8 +83,7 @@ public class Archive {
             } else {
                 mtime = nil
             }
-            let entry = Entry(index: i, path: filename, uncompressedSize: filesize, directory: isDirectory, modified: mtime, archive: self)
-            return entry
+            return Entry(index: i, path: filename, uncompressedSize: filesize, directory: isDirectory, modified: mtime)
         }
     }
 

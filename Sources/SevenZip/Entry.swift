@@ -9,5 +9,4 @@ public struct Entry {
     public let uncompressedSize: UInt64
     public let directory: Bool
     public let modified: Date?
-    public let archive: Archive
 }
