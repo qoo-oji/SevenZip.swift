@@ -4,12 +4,9 @@ import XCTest
 
 final class ArchiveSpecTests: XCTestCase {
     func testOpen() throws {
-        guard let url = Bundle.module.url(forResource: "sample", withExtension: "7z") else {
-            XCTFail()
-            return
-        }
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "sample", withExtension: "7z"))
         let archive = try Archive(fileURL: url)
-        let entry = archive.entries.first!
+        let entry = try XCTUnwrap(archive.entries.first)
         XCTAssertEqual(entry.path, "LICENSE.txt")
         XCTAssertEqual(entry.uncompressedSize, 1094)
         XCTAssertFalse(entry.directory)
@@ -18,12 +15,9 @@ final class ArchiveSpecTests: XCTestCase {
     }
 
     func testLargeFile() throws {
-        guard let url = Bundle.module.url(forResource: "largefile", withExtension: "7z") else {
-            XCTFail()
-            return
-        }
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "largefile", withExtension: "7z"))
         let archive = try Archive(fileURL: url)
-        let entry = archive.entries.first!
+        let entry = try XCTUnwrap(archive.entries.first)
         XCTAssertEqual(entry.path, "631px-FullMoon2010.bmp")
         var data = try archive.extract(entry: entry)
         XCTAssertEqual(data.sha256Digest, "d666500f1a28b5a40d09a2a1e7558cd3cdd60120b2d4bba0dcf05e78b41b075e")
@@ -32,10 +26,7 @@ final class ArchiveSpecTests: XCTestCase {
     }
 
     func testUtf8Archive() throws {
-        guard let url = Bundle.module.url(forResource: "utf8", withExtension: "7z") else {
-            XCTFail()
-            return
-        }
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "utf8", withExtension: "7z"))
         let archive = try Archive(fileURL: url)
         XCTAssertTrue(archive.entries.contains { $0.path == "日本語🧔‍♂️🍺" })
         XCTAssertTrue(archive.entries.contains { $0.path.contains("これは月の画像です.jpg") })
@@ -43,15 +34,9 @@ final class ArchiveSpecTests: XCTestCase {
     }
 
     func testEmptyArchive() throws {
-        guard let url = Bundle.module.url(forResource: "empty", withExtension: "7z") else {
-            XCTFail()
-            return
-        }
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "empty", withExtension: "7z"))
         let archive = try Archive(fileURL: url)
-        guard let entry = archive.entries.first else {
-            XCTFail()
-            return
-        }
+        let entry = try XCTUnwrap(archive.entries.first)
         let data = try archive.extract(entry: entry)
         XCTAssertEqual(data.count, 0)
     }
