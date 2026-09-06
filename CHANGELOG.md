@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## v0.4.0 (2026-09-06)
+
+- BREAKING: Remove Entry.archive (#9)
+  - It formed a reference cycle, so no Archive was ever deallocated and its file descriptor, parsed index and buffers were never released
+  - Use archive.extract(entry:) instead of entry.archive.extract(entry:)
+- Entry now conforms to Sendable (#9)
+
 ## v0.3.0 (2026-09-06)
 
 - Support extracting PPMd compressed archives (#8)
