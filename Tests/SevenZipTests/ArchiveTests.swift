@@ -73,4 +73,23 @@ final class ArchiveSpecTests: XCTestCase {
         XCTAssertEqual(data.count, Int(entry.uncompressedSize))
         XCTAssertEqual(data.sha256Digest, "b28b7b6753000c2e5fe368ef69f0c7c8b09de048f8fd140cda102d736c26433b")
     }
+
+    /// `Archive` owns the archive's file descriptor, the parsed index and `outBuffer`, and none
+    /// of them are given back before `deinit` runs, so it has to die with its last reference.
+    /// While `Entry` referred back to its archive, the stored `entries` formed a cycle and no
+    /// `Archive` was ever deallocated.
+    func testArchiveIsReleasedWithItsLastReference() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "sample", withExtension: "7z"))
+        weak var weakArchive: Archive?
+        try autoreleasepool {
+            var archive: Archive? = try Archive(fileURL: url)
+            weakArchive = archive
+            let entry = try XCTUnwrap(archive?.entries.first)
+            _ = try archive?.extract(entry: entry)
+            archive = nil
+            // The entry stays usable once its archive is gone: it holds no reference to it.
+            XCTAssertEqual(entry.path, "LICENSE.txt")
+        }
+        XCTAssertNil(weakArchive, "the archive outlived its last reference; its file descriptor and buffers leak")
+    }
 }
