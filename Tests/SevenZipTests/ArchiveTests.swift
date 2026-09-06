@@ -55,4 +55,26 @@ final class ArchiveSpecTests: XCTestCase {
         let data = try archive.extract(entry: entry)
         XCTAssertEqual(data.count, 0)
     }
+
+    /// The 7z header stores modification times as a FILETIME table with a presence bitmap;
+    /// `SzBitWithVals_Check` reports whether a given file has an entry in it.
+    /// mtime.7z holds one file whose modification time was set to 2026-01-02 03:04:05 UTC.
+    func testModified() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "mtime", withExtension: "7z"))
+        let archive = try Archive(fileURL: url)
+        let entry = try XCTUnwrap(archive.entries.first)
+        XCTAssertEqual(entry.path, "hello.txt")
+        let modified = try XCTUnwrap(entry.modified, "the archive carries a modification time")
+        XCTAssertEqual(modified.timeIntervalSince1970, 1_767_323_045, accuracy: 0.001)
+    }
+
+    /// no_mtime.7z was written with -mtm=off, so the table is absent altogether and
+    /// `CSzArEx.MTime.Vals` is NULL.
+    func testNoTimestampArchive() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "no_mtime", withExtension: "7z"))
+        let archive = try Archive(fileURL: url)
+        let entry = try XCTUnwrap(archive.entries.first)
+        XCTAssertEqual(entry.path, "hello.txt")
+        XCTAssertNil(entry.modified)
+    }
 }
