@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## v0.3.0 (2026-09-06)
+
+- Support extracting PPMd compressed archives (#8)
+- Fix Entry.modified was always nil (#5)
+- Close the archive file when Archive is deallocated (#7)
+
 ## v0.2.7 (2026-06-27)
 
 - Bump up LZMA SDK to v26.02
