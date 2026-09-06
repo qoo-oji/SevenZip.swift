@@ -23,13 +23,14 @@ GB 単位のメモリが常駐します。
 | `Sources/SevenZip/ArchiveStreaming.swift`(新規) | Swift 側 API(`read` / `readData` / `discardFolderStream`) |
 | `Sources/CsevenZip/7zMemInStream.h` / `.c`(新規) | メモリ上のバッファを読む `ISeekInStream`。`Archive(data:)` の土台 |
 | `Sources/SevenZip/Archive.swift` | `init(data:)`(メモリから開く)を追加し、ファイル/メモリどちらの入力も `seekStream` 経由で読むように整理。deinit でファイルを閉じる(upstream は閉じていなかった)。ブロックデコーダを保持するプロパティと deinit での解放。`db` / `archiveStream` / `allocImp` を internal に。`LZMAError` を public にし `.unsupported` / `.decodeFailed(code:)` を追加。`extract(entry:)` は非対応構成で `.unsupported` を投げる(従来は `.badFile`) |
-| `Package.swift` | `7zFolderStream.c` をソースに追加。`Z7_PPMD_SUPPORT` を定義(下記)。`sevenzip-bench` 実行ターゲットと `streaming-fixture` リソースを追加 |
+| `Package.swift` | `7zFolderStream.c` / `7zMemInStream.c` をソースに追加。`sevenzip-bench` 実行ターゲットと `streaming-fixture` リソースを追加(`Z7_PPMD_SUPPORT` は upstream v0.3.0 に入ったので、こちらの差分ではなくなった) |
 | `Sources/sevenzip-bench/main.swift`(新規) | 旧経路と新経路の時間・メモリ比較ツール |
 | `Tests/SevenZipTests/StreamingTests.swift`(新規) | ストリーミング経路のテスト |
 | `Tests/SevenZipTests/streaming-fixture/`(新規) | テスト用書庫 14 種と sha256 の manifest、生成スクリプト |
 | `README.md` / `CHANGELOG.md` | 機能と使い方の追記 |
 
-既存の公開 API(`Archive.init` / `entries` / `extract(entry:bufSize:)` / `Entry`)は変更していません。
+既存の公開 API(`Archive.init` / `entries` / `extract(entry:bufSize:)` / `Entry`)はフォーク側では
+変更していません(`Entry.archive` の削除は upstream v0.4.0 の破壊的変更で、下記)。
 
 ## API
 
@@ -145,7 +146,8 @@ CRC を照合し、不一致なら `LZMAError.decodeFailed(code: SZ_ERROR_CRC)` 
 
 upstream は 7zDec.c の `Z7_PPMD_SUPPORT` を定義しておらず、PPMd 圧縮の 7z は `extract` で失敗していました。
 `Ppmd7.c` / `Ppmd7Dec.c` は元々コンパイル対象だったため、`Package.swift` で定義を有効にしました。
-これにより従来の `extract(entry:)` でも PPMd を読めます。
+これにより従来の `extract(entry:)` でも PPMd を読めます(この定義は PR #8 として upstream v0.3.0 に
+入ったので、現在はフォークの差分ではありません)。
 
 ## 実測
 
@@ -198,25 +200,33 @@ swift build -c release
   (中央から前後交互に 100 エントリ 250MB を読むと、書庫順なら 10 秒のところが 230 秒になる)。
 - `Archive` はスレッドセーフではない。
 
-## upstream から直したもの
+## upstream へ還元したもの
 
-- **`Entry.modified` が常に nil だった。** `Archive.init` の
+フォークの作業中に見つかった **upstream 由来の不具合**は、フォーク独自の機能とは切り離して 2026-09-06 に
+PR として送り、v0.3.0 / v0.4.0 で取り込まれました。フォークはそれを merge して追従しています。
+
+- **`Entry.modified` が常に nil だった**(#5、v0.3.0)。`Archive.init` の
   `SevenZip_SzBitWithVals_Check(&db.MTime, i) == 0` は条件が逆で(このマクロは値が**ある**ときに
   非 0 を返す。`7z.h`)、日時を持つ書庫でも nil になり、逆に日時を持たない書庫では `MTime.Vals` を
   NULL のまま読んでいた。`!= 0` と `Vals` の nil 検査へ直し、FILETIME → Unix 時間の計算も
-  1970 より前でアンダーフローしないよう Double で行うようにした(`EntryDateTests`)。
-
-- **`Archive` が一度も解放されなかった。** `Entry` は自分が属する `Archive` を強参照で持ち、
+  1970 より前でアンダーフローしないよう Double で行うようにした。
+- **`deinit` がファイルを閉じていなかった**(#7、v0.3.0)。`InFile_Open` で開いた fd がそのまま残る
+  (下の参照循環に隠れて表に出ていなかった)。`File_Close` を呼ぶようにした
+  (`ArchiveLifetimeTests.testOpeningManyArchivesDoesNotLeakFileDescriptors`)。
+  なお、メモリから開いた `Archive` は `InFile_Open` を通っていないので、フォークでは
+  `isFileOpen` を見てから閉じる。
+- **PPMd 圧縮の 7z が読めなかった**(#8、v0.3.0)。`Z7_PPMD_SUPPORT`(下記)。
+- **`Archive` が一度も解放されなかった**(v0.4.0)。`Entry` は自分が属する `Archive` を強参照で持ち、
   その `Archive` が `entries: [Entry]` を保持していたため、参照循環になって `deinit` が走らない。
   ファイルディスクリプタ・索引・`outBuffer`、そしてフォークが足したブロックデコーダの LZMA 辞書
-  (16〜64MB)が、書庫を開くたびにプロセスの終わりまで残っていた。`entries` を格納プロパティから
-  **アクセスのたびに組み立てる計算プロパティ**へ変え、各ファイルの情報は `EntryRecord`(archive への
-  逆参照を持たない)で保持するようにした。`Entry` を持ち続ければ `Archive` が生き続けるという
-  従来の意味は変わらない(`unowned` にする案は、`Archive` を先に捨てたコードが落ちるので採らなかった)。
-  `ArchiveLifetimeTests`。
-- **`deinit` がファイルを閉じていなかった。** `InFile_Open` で開いた fd がそのまま残る
-  (上の参照循環に隠れて表に出ていなかった)。`File_Close` を呼ぶようにした
-  (`ArchiveLifetimeTests.testOpeningManyArchivesDoesNotLeakFileDescriptors`)。
+  (16〜64MB)が、書庫を開くたびにプロセスの終わりまで残っていた。
+  こちらは**送った PR(#6)とは違う直し方が採られた**。PR は `Entry.archive` を残したまま
+  `entries` をアクセスのたびに組み立てる計算プロパティへ変える案だったが、メンテナは
+  `Entry.archive` そのものを削除する破壊的変更を選んだ(#9)。循環の芽が残らず、`entries` を
+  格納プロパティのまま置けて、`Entry` が値だけになるので `Sendable` にできる、という判断で、
+  こちらのほうが素直なので #6 は閉じてもらった。`Entry` を持ち続けても `Archive` は生き続けない
+  ので、エントリを使う側は `Archive` を自分で持つこと(qooViewer の `SevenZipArchiveReader` は
+  もともとそうしている)。`ArchiveLifetimeTests`。
 
 ## upstream への追従
 

@@ -6,10 +6,11 @@ import XCTest
 /// descriptor, the parsed index, `outBuffer` and -- the big one -- the streaming decoder's LZMA
 /// dictionary, none of which are freed before `deinit` runs.
 ///
-/// `Entry` holds a strong reference back to its archive, so an `Archive` that also stored its
-/// `[Entry]` could never reach a retain count of zero. That is what used to happen (the bug is
-/// still in upstream): every archive opened stayed resident for the life of the process, and
-/// dropping the reader did not give anything back.
+/// `Entry` used to hold a strong reference back to its archive, so an `Archive` storing its
+/// `[Entry]` could never reach a retain count of zero: every archive opened stayed resident for
+/// the life of the process. Upstream broke that cycle by removing `Entry.archive` (v0.4.0), and
+/// `ArchiveSpecTests` covers the file-backed case; what is tested here is the fork's own memory:
+/// the folder stream's dictionary and an archive opened from `Data`.
 final class ArchiveLifetimeTests: XCTestCase {
     private func fixtureURL(_ name: String) throws -> URL {
         try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "7z", subdirectory: "streaming-fixture"))
@@ -41,27 +42,6 @@ final class ArchiveLifetimeTests: XCTestCase {
             archive = nil
         }
         XCTAssertNil(weakArchive, "the in-memory archive outlived its last reference; its copy of the bytes leaks")
-    }
-
-    /// The other half of the contract: an `Entry` kept by the caller still keeps its archive
-    /// alive, so `entry.archive` never dangles.
-    func testAnEntryKeepsItsArchiveAlive() throws {
-        let url = try fixtureURL("lzma2_solid")
-        weak var weakArchive: Archive?
-        var heldEntry: Entry?
-        try autoreleasepool {
-            var archive: Archive? = try Archive(fileURL: url)
-            weakArchive = archive
-            heldEntry = archive?.entries.first { !$0.directory && $0.uncompressedSize > 0 }
-            archive = nil
-        }
-        XCTAssertNotNil(weakArchive, "an entry must keep its archive alive")
-        try autoreleasepool {
-            let entry = try XCTUnwrap(heldEntry)
-            XCTAssertEqual(try entry.archive.readData(entry: entry).count, Int(entry.uncompressedSize))
-        }
-        heldEntry = nil
-        XCTAssertNil(weakArchive, "letting the last entry go must release the archive")
     }
 
     /// `deinit` closes the file. Before that (and while the cycle above kept `deinit` from

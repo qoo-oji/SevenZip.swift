@@ -19,30 +19,7 @@ private var moduleInit: Void = {
 }()
 
 public class Archive {
-    /// The files the archive holds, rebuilt on every access.
-    ///
-    /// `Entry` keeps a strong reference to the archive it came from, so keeping the array in a
-    /// stored property forms a reference cycle: the archive is never released, and its file
-    /// handle, index and decoder buffers stay alive for the rest of the process even after the
-    /// last caller has dropped it. The per-file data lives in `entryRecords` instead, and the
-    /// `Entry` values -- which are what carries the back reference -- are made on demand.
-    public var entries: [Entry] {
-        entryRecords.map { record in
-            Entry(
-                index: record.index, path: record.path, uncompressedSize: record.uncompressedSize,
-                directory: record.directory, modified: record.modified, archive: self)
-        }
-    }
-
-    /// Everything `Entry` carries except the back reference to the archive.
-    private struct EntryRecord {
-        let index: UInt32
-        let path: String
-        let uncompressedSize: UInt64
-        let directory: Bool
-        let modified: Date?
-    }
-    private var entryRecords: [EntryRecord] = []
+    private(set) public var entries: [Entry] = []
     var allocImp = ISzAlloc(Alloc: SzAlloc, Free: SzFree)
     private var allocTempImp = ISzAlloc(Alloc: SzAlloc, Free: SzFree)
     var db = CSzArEx()
@@ -128,7 +105,7 @@ public class Archive {
         if SzArEx_Open(&self.db, &self.lookStream.vt, &self.allocImp, &self.allocTempImp) != 0 {
             throw LZMAError.badFile
         }
-        self.entryRecords = try (0..<self.db.NumFiles).map { i in
+        self.entries = try (0..<self.db.NumFiles).map { i in
             let len = SzArEx_GetFileNameUtf16(&self.db, Int(i), nil)
             guard let temp = SzAlloc(nil, len * MemoryLayout<UInt16>.size)?.assumingMemoryBound(to: UInt16.self) else {
                 throw LZMAError.noMemory
@@ -142,22 +119,21 @@ public class Archive {
             }
             let filesize = SevenZip_SzArEx_GetFileSize(&self.db, i)
             let isDirectory = SevenZip_SzArEx_IsDir(&self.db, i) != 0
-            // SzBitWithVals_Check returns non-zero when the file HAS the value (7z.h). The check
-            // used to be `== 0`, which meant modified was always nil for archives that do carry
-            // timestamps -- and, for archives that do not, it read MTime.Vals while Defs was NULL.
+            // SzBitWithVals_Check returns non-zero when the file HAS the value (7z.h), so this
+            // has to be `!= 0`; `Vals` itself is NULL when no file in the archive has one.
             let mtime: Date?
             if SevenZip_SzBitWithVals_Check(&db.MTime, i) != 0, let values = db.MTime.Vals {
                 let high = UInt64(values[Int(i)].High)
                 let low = UInt64(values[Int(i)].Low)
-                // FILETIME: 100-ns ticks since 1601-01-01. Compute in Double so that timestamps
-                // before 1970 do not underflow (UInt64 subtraction traps) and sub-second precision
-                // survives.
+                // FILETIME: 100-ns ticks since 1601-01-01. Computed in Double so that a timestamp
+                // before 1970 does not underflow (the UInt64 subtraction traps) and the sub-second
+                // part survives.
                 let ticks = Double(high << 32 | low)
                 mtime = Date(timeIntervalSince1970: ticks / 10_000_000 - 11_644_473_600)
             } else {
                 mtime = nil
             }
-            return EntryRecord(index: i, path: filename, uncompressedSize: filesize, directory: isDirectory, modified: mtime)
+            return Entry(index: i, path: filename, uncompressedSize: filesize, directory: isDirectory, modified: mtime)
         }
     }
 
@@ -167,6 +143,8 @@ public class Archive {
             self.allocImp.Free(nil, pointee)
         }
         SzArEx_Free(&self.db, &self.allocImp)
+        // InFile_Open opened the file in init; nothing else closes it. An archive opened from
+        // memory never went through InFile_Open, so its CSzFile must be left alone.
         if self.isFileOpen {
             File_Close(&self.archiveStream.pointee.file)
         }

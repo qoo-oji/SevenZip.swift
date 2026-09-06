@@ -3,11 +3,10 @@
 
 import Foundation
 
-public struct Entry {
+public struct Entry: Sendable {
     public let index: UInt32
     public let path: String
     public let uncompressedSize: UInt64
     public let directory: Bool
     public let modified: Date?
-    public let archive: Archive
 }

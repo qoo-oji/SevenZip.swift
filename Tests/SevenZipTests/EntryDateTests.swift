@@ -2,38 +2,14 @@ import XCTest
 
 @testable import SevenZip
 
-/// `Entry.modified`. The 7z header carries modification times as a FILETIME table with a
-/// presence bitmap; `SzBitWithVals_Check` reports whether a given file has an entry in it.
-///
-/// The check used to be inverted, so `modified` was always nil for archives that do carry
-/// timestamps -- and, for archives that do not, the code read `MTime.Vals` while `Defs` was
-/// NULL. Both fixtures below exist to keep that from coming back.
+/// `Entry.modified` over the streaming fixtures. The FILETIME conversion itself, and the archive
+/// that carries no timestamp table at all, are covered by `ArchiveSpecTests` upstream; what is
+/// left here is the sanity check across a whole archive.
 final class EntryDateTests: XCTestCase {
     private func openArchive(_ name: String) throws -> Archive {
         let url = try XCTUnwrap(
             Bundle.module.url(forResource: name, withExtension: "7z", subdirectory: "streaming-fixture"))
         return try Archive(fileURL: url)
-    }
-
-    /// mtime.7z holds one file touched to 2026-01-02 03:04:05 UTC (generate.sh).
-    func testModifiedIsReadFromTheHeader() throws {
-        let archive = try openArchive("mtime")
-        let entry = try XCTUnwrap(archive.entries.first)
-        XCTAssertEqual(entry.path, "hello.txt")
-        let modified = try XCTUnwrap(entry.modified, "the archive has a modification time")
-        XCTAssertEqual(modified.timeIntervalSince1970, 1_767_323_045, accuracy: 0.001)
-        XCTAssertEqual(String(data: try archive.readData(entry: entry), encoding: .utf8),
-                       "SevenZip.swift mtime fixture\n")
-    }
-
-    /// no_mtime.7z was written with -mtm=off: the whole table is absent.
-    func testArchiveWithoutTimestamps() throws {
-        let archive = try openArchive("no_mtime")
-        let entry = try XCTUnwrap(archive.entries.first)
-        XCTAssertEqual(entry.path, "hello.txt")
-        XCTAssertNil(entry.modified)
-        XCTAssertEqual(String(data: try archive.readData(entry: entry), encoding: .utf8),
-                       "SevenZip.swift mtime fixture\n")
     }
 
     /// Every file in a normal archive gets a timestamp, and they are recent-ish (i.e. the
