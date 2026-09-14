@@ -46,7 +46,13 @@ extension Archive {
             - self.db.UnpackPositions[Int(self.db.FolderToFile[Int(folderIndex)])]
 
         guard let stream = try self.folderStream(for: folderIndex, positionedAt: offsetInFolder) else {
-            // Unsupported coder chain: fall back to the block cache.
+            // Unsupported coder chain: fall back to the block cache, which holds the whole block.
+            if let limit = self.maxWholeBlockBytes {
+                let unpackSize = SzAr_GetFolderUnpackSize(&self.db.db, folderIndex)
+                if unpackSize > limit {
+                    throw LZMAError.blockTooLarge(unpackSize: unpackSize)
+                }
+            }
             let data = try self.extract(entry: entry)
             try data.withUnsafeBytes { (whole: UnsafeRawBufferPointer) in
                 var start = 0

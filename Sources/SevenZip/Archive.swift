@@ -11,6 +11,10 @@ public enum LZMAError: Error, Equatable {
     case unsupported
     /// The LZMA SDK reported an error (`SZ_ERROR_*` code) while decoding.
     case decodeFailed(code: Int32)
+    /// Reading the entry would decode its whole solid block into memory (a coder chain the
+    /// streaming decoder does not handle, such as BCJ2), and the block's declared unpacked size
+    /// is above `Archive.maxWholeBlockBytes`.
+    case blockTooLarge(unpackSize: UInt64)
 }
 
 private var moduleInit: Void = {
@@ -55,6 +59,17 @@ public class Archive {
     /// so that a client can keep its own access order honest (qooViewer regression-tests that
     /// reading a book's pages in archive order causes no restart).
     public internal(set) var folderStreamRestartCount = 0
+
+    /// The largest solid block `read(entry:)` / `readData(entry:)` may decode whole into memory
+    /// when the block's coder chain is not supported by the streaming decoder (BCJ2, ...) and
+    /// they fall back to `extract(entry:)`. `nil` (the default) sets no limit. Above it, the read
+    /// throws `LZMAError.blockTooLarge` before allocating anything.
+    ///
+    /// The fallback allocates the block's full unpacked size up front, so a tiny archive whose
+    /// index declares a huge block costs that much memory just to read its first small file
+    /// (a 143 KB archive with an 800 MB BCJ2 block took 845 MB). A client that reads entries it
+    /// was not explicitly asked for, such as a thumbnailer, can bound that here.
+    public var maxWholeBlockBytes: UInt64?
 
     public init(fileURL: URL) throws {
         _ = moduleInit

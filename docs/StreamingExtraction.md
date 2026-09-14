@@ -53,6 +53,9 @@ let bytes = archive.residentDecoderBytes
 
 // ブロック先頭からデコーダを作り直した回数(読み方の検証用。下記「ブロックデコーダの再利用」)
 let restarts = archive.folderStreamRestartCount
+
+// フォールバック(BCJ2 など)でブロック丸ごと伸長してよい上限。超えると LZMAError.blockTooLarge(下記「対応するコーダ構成」)
+archive.maxWholeBlockBytes = 64 << 20
 ```
 
 - 空ファイルとディレクトリは `body` を呼ばずに終了し、`readData` は空の `Data` を返します。
@@ -119,6 +122,13 @@ let restarts = archive.folderStreamRestartCount
 上記以外(BCJ2、BZip2、Deflate、7zAES など)は `SzFolderStream_Create` が `SZ_ERROR_UNSUPPORTED` を返し、
 Swift 側は**従来の `extract(entry:)` にフォールバック**します。したがって `read` / `readData` が読める書庫の範囲は
 `extract` 以上です。BZip2 / Deflate / 暗号化は 7zDec.c 側にも実装が無いので、どちらの経路でも失敗します。
+
+フォールバックはブロックの伸長後の大きさ(索引の宣言)を**最初に丸ごと確保**します。800MB のゼロと 20KB の jpg を
+`-mf=BCJ2` で固めた 143KB の書庫で、jpg 1 枚を読むだけで RSS が 845MB になりました(LZMA2 なら 40MB。2026-09-14、
+qooViewer の監査で実測)。頼まれていないエントリを読む利用者(サムネイルなど)のために `maxWholeBlockBytes` を足し、
+設定されていればフォールバックの前に `SzAr_GetFolderUnpackSize` と比べて、超えたら何も確保せずに
+`LZMAError.blockTooLarge(unpackSize:)` を投げます。既定は `nil`(上限なし。従来どおり)で、ストリーミングできる
+ブロックには効きません(`testWholeBlockLimitRefusesLargeFallbackBlocks`)。
 
 ### 入力の読み方
 
@@ -194,7 +204,8 @@ swift build -c release
 
 ## 既知の制限
 
-- BCJ2 はストリーミングせず `extract` に任せる(ブロック丸ごと伸長)。x86 実行ファイル向けの構成なので画像用途では出ない。
+- BCJ2 はストリーミングせず `extract` に任せる(ブロック丸ごと伸長)。x86 実行ファイル向けの構成なので画像用途では出ないが、
+  細工された書庫では出せるので、頼まれていないエントリを読むときは `maxWholeBlockBytes` で上限を付ける。
 - 後方ジャンプは LZMA 辞書の範囲(通常 16〜64MB)か Copy ブロック内なら無料、それより外はブロック先頭からの
   やり直し。ブロックを**前後交互**に舐めるような読み方は辞書の外へすぐ出るので、利用側は書庫順に読むこと
   (中央から前後交互に 100 エントリ 250MB を読むと、書庫順なら 10 秒のところが 230 秒になる)。

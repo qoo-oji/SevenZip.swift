@@ -123,6 +123,30 @@ final class StreamingTests: XCTestCase {
         XCTAssertEqual(try archive.readData(entry: dir).count, 0)
     }
 
+    func testWholeBlockLimitRefusesLargeFallbackBlocks() throws {
+        let archive = try openArchive("bcj2_lzma2")
+        let entry = try XCTUnwrap(archive.entries.first { !$0.directory && $0.uncompressedSize > 0 })
+        let blockSize = archive.entries.filter { !$0.directory }.reduce(UInt64(0)) { $0 + $1.uncompressedSize }
+        archive.maxWholeBlockBytes = 1
+        XCTAssertThrowsError(try archive.readData(entry: entry)) { error in
+            guard case LZMAError.blockTooLarge(let unpackSize) = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+            XCTAssertGreaterThan(unpackSize, 1)
+            XCTAssertLessThanOrEqual(unpackSize, blockSize)
+        }
+        XCTAssertEqual(archive.residentDecoderBytes, 0, "nothing was allocated")
+        archive.maxWholeBlockBytes = blockSize
+        XCTAssertEqual(sha256(try archive.readData(entry: entry)), try expectedDigest(for: entry))
+
+        // Streaming blocks are never affected: their memory is bounded by the decoder state.
+        let streaming = try openArchive("lzma2_solid")
+        streaming.maxWholeBlockBytes = 1
+        for file in streaming.entries where !file.directory {
+            XCTAssertEqual(sha256(try streaming.readData(entry: file)), try expectedDigest(for: file))
+        }
+    }
+
     func testUnsupportedCoderChainsThrow() throws {
         for name in Self.unsupportedArchives {
             let archive = try openArchive(name)
