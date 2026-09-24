@@ -73,6 +73,18 @@ archive.maxWholeBlockBytes = 64 << 20
 オブジェクトで、`Data` のポインタは `withUnsafeBytes` の外では安定が保証されないためです。呼び出し側は
 開いたあと自分の `Data` を手放して構いません(その時点で書庫 1 つぶんのメモリになります)。
 
+## 呼び出し側の関数から読む(`Archive(reader:)`、2026-09-24)
+
+同じ `seekStream` の仕組みに、読み取りを**呼び出し側の関数**へ回す 3 つ目の実装(`CCallbackInStream`、
+`7zMemInStream.c` の中)を足しました。qooViewer がネットワークボリューム上の書庫を、自前のブロックキャッシュ
+(読み込み層)を通して読むためのものです ―― 手元にある部分は手元から読み、ソリッドブロックの順読みには先回りして
+大きく取り寄せるので、伸長(CPU)と転送が重なります。
+
+- `Archive.PositionalReader(size:read:)` の `read(offset, buffer)` は、入れたバイト数(終わりで 0、失敗で -1)を返す。
+  短い読みを返してよい(LZMA SDK の `LookToRead2` / `LookInStream_Read` が繰り返す)。-1 は `SZ_ERROR_READ` になる。
+- `Archive` は reader を自分の寿命のあいだ保持する(メモリ版がバッファを持つのと同じ)。
+- `Archive` はスレッドセーフではないので、reader は 1 度に 1 つのスレッドからしか呼ばれない。
+
 ## 動作
 
 ### ブロックデコーダの再利用
@@ -186,6 +198,9 @@ swift test
 非対応(BZip2 / Deflate)・`discardFolderStream` 後の読み取り・`extract` との一致を確認します。
 `bcj_boundary.7z` は 700KB の疑似 x86 コードで、フィルタの 256KB 境界が変換対象の途中に複数回落ちる
 ケースです。
+
+`ReaderArchiveTests` は同じ書庫を `Archive(reader:)` で開き(1 回 4099 バイトずつしか返さない読み手でも)、
+ファイル版と一覧・`readData`・`extract` が一致すること、読み取りの失敗で落ちずにエラーになることを確認します。
 
 `mtime.7z` / `no_mtime.7z` は `Entry.modified`(ヘッダーの FILETIME)用です。前者は
 2026-01-02 03:04:05 UTC に固定した 1 ファイル、後者は `-mtm=off` で日時を一切持たない書庫

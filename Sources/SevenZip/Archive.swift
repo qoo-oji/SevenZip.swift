@@ -37,8 +37,30 @@ public class Archive {
     /// Memory-backed source (`init(data:)`): the archive bytes and the LZMA SDK stream over them.
     private var memoryBuffer: UnsafeMutableRawBufferPointer?
     private var memoryStream: UnsafeMutablePointer<CMemInStream>?
+    /// Reader-backed source (`init(reader:)`): the caller's reader (kept alive by the archive) and the stream over it.
+    private var positionalReader: PositionalReader?
+    private var readerStream: UnsafeMutablePointer<CCallbackInStream>?
+
+    /// Reads bytes of an archive by position, for `init(reader:)`.
+    ///
+    /// `read(offset, buffer)` fills up to `buffer.count` bytes starting at `offset` and returns how
+    /// many it filled: 0 at or past the end, -1 on an error (the archive operation then fails with a
+    /// read error). It may return fewer bytes than asked. It is called on the thread that uses the
+    /// archive (an `Archive` is not thread-safe, so one call at a time).
+    public final class PositionalReader: @unchecked Sendable {
+        public let size: Int64
+        let read: (Int64, UnsafeMutableRawBufferPointer) -> Int
+
+        public init(size: Int64, read: @escaping (Int64, UnsafeMutableRawBufferPointer) -> Int) {
+            self.size = size
+            self.read = read
+        }
+    }
     /// The seekable stream every reader (block cache and streaming decoder) pulls the archive from.
     var seekStream: ISeekInStreamPtr {
+        if let readerStream = self.readerStream {
+            return UnsafePointer(readerStream.pointer(to: \.vt)!)
+        }
         if let memoryStream = self.memoryStream {
             return UnsafePointer(memoryStream.pointer(to: \.vt)!)
         }
@@ -98,6 +120,24 @@ public class Archive {
         stream.initialize(to: CMemInStream())
         MemInStream_Init(stream, buffer.baseAddress, data.count)
         self.memoryStream = stream
+        try self.openDatabase()
+    }
+
+    /// Opens an archive read through a caller-supplied positional reader, so that a client can put
+    /// its own I/O layer (for example a block cache over a network volume) under the decoder.
+    /// The archive keeps the reader alive for its lifetime.
+    public init(reader: PositionalReader) throws {
+        _ = moduleInit
+        self.positionalReader = reader
+        let stream = UnsafeMutablePointer<CCallbackInStream>.allocate(capacity: 1)
+        stream.initialize(to: CCallbackInStream())
+        let callback: CallbackInStreamRead = { ctx, offset, buf, size in
+            guard let ctx, let buf else { return -1 }
+            let reader = Unmanaged<PositionalReader>.fromOpaque(ctx).takeUnretainedValue()
+            return Int64(reader.read(offset, UnsafeMutableRawBufferPointer(start: buf, count: size)))
+        }
+        CallbackInStream_Init(stream, Unmanaged.passUnretained(reader).toOpaque(), callback, reader.size)
+        self.readerStream = stream
         try self.openDatabase()
     }
 
@@ -170,6 +210,10 @@ public class Archive {
             memoryStream.deallocate()
         }
         self.memoryBuffer?.deallocate()
+        if let readerStream = self.readerStream {
+            readerStream.deinitialize(count: 1)
+            readerStream.deallocate()
+        }
     }
 
     // TODO: super large file

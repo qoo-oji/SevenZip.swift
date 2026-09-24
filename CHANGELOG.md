@@ -7,6 +7,7 @@
   - The entry's CRC is verified on a complete read, as `extract(entry:)` does
   - Fix a spurious end-of-input error on filtered (BCJ / ARM64 / ...) blocks whose tail is shorter than one instruction
 - Add `Archive(data:)` to open an archive held in memory without a temporary file
+- Add `Archive(reader:)` to read an archive through a caller-supplied positional reader (`CCallbackInStream`), e.g. a block cache over a network volume
 
 ## v0.4.0 (2026-09-06)
 

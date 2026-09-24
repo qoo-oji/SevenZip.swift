@@ -23,6 +23,21 @@ typedef struct
 
 void MemInStream_Init(CMemInStream *p, const void *data, size_t size);
 
+/* ISeekInStream over a caller-supplied positional reader (`Archive(reader:)`).
+   `read(ctx, offset, buf, size)` returns the number of bytes it put in `buf`
+   (0 at or past the end, -1 on an error, which becomes SZ_ERROR_READ). */
+typedef Int64 (*CallbackInStreamRead)(void *ctx, Int64 offset, void *buf, size_t size);
+typedef struct
+{
+  ISeekInStream vt;
+  void *ctx;
+  CallbackInStreamRead read;
+  Int64 size;
+  Int64 pos;
+} CCallbackInStream;
+
+void CallbackInStream_Init(CCallbackInStream *p, void *ctx, CallbackInStreamRead read, Int64 size);
+
 EXTERN_C_END
 
 #endif

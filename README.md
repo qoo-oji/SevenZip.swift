@@ -7,6 +7,7 @@ A tiny Swift library to extract 7zip archive using [LZMA SDK v26.02](https://www
 - [x] Extract a file from 7z archive file to memory
 - [x] Read entries of a solid archive one after another with bounded memory (streaming)
 - [x] Open an archive held in memory (`Archive(data:)`), e.g. a nested archive, without writing it to disk
+- [x] Read an archive through your own positional reader (`Archive(reader:)`), e.g. a block cache over a network volume
 
 ## Requirements
 
