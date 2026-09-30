@@ -9,6 +9,10 @@
 - Add `Archive(data:)` to open an archive held in memory without a temporary file
 - Add `Archive(reader:)` to read an archive through a caller-supplied positional reader (`CCallbackInStream`), e.g. a block cache over a network volume
 
+## v0.4.1 (2026-09-17)
+
+- Bump up LZMA SDK to v26.03
+
 ## v0.4.0 (2026-09-06)
 
 - BREAKING: Remove Entry.archive (#9)
